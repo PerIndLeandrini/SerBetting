@@ -929,48 +929,73 @@ with tabs[8]:
     if not bets:
         st.info("Nessuna schedina salvata finora.")
     else:
+        # Mappa ID bet -> indice reale nell’array profile["bets"]
+        bet_idx_map = {b["id"]: i for i, b in enumerate(bets)}
+
         # Filtro
-        status_filter = st.multiselect("Stato", ["open","won","lost","void","partial"], default=["open","won","lost","void","partial"])
-        type_filter = st.multiselect("Tipo", ["single","multiple","system"], default=["multiple","system","single"])
+        status_filter = st.multiselect("Stato", ["open","won","lost","void","partial"],
+                                       default=["open","won","lost","void","partial"])
+        type_filter = st.multiselect("Tipo", ["single","multiple","system"],
+                                     default=["multiple","system","single"])
         filtered = [b for b in bets if b["status"] in status_filter and b["type"] in type_filter]
 
         # Render
         for b in sorted(filtered, key=lambda x: x.get("created_at",""), reverse=True):
-            with st.expander(f"[{b['type'].upper()}] ID: {b['id']} • creato: {b.get('created_at','')} • stato: {b['status']}"):
-                if b["type"] == "multiple":
-                    st.write(f"Stake: **{b['stake']:.2f} €**  |  Quota: **{b['combined_odds']:.2f}**  |  Potenziale: **{b['potential_return']:.2f} €**")
-                    legs_df = pd.DataFrame(b["legs"])
-                    st.dataframe(legs_df[["label","odds","prob","fair"]].rename(columns={"label":"Selezione","odds":"Quota","prob":"Prob.","fair":"Fair"})
-                                 .style.format({"Quota":"{:.2f}","Prob.":"{:.1%}","Fair":"{:.2f}"}), use_container_width=True)
+            real_i = bet_idx_map[b["id"]]
+            real_b = profile["bets"][real_i]
 
-                    if b["status"] == "open":
+            with st.expander(f"[{real_b['type'].upper()}] ID: {real_b['id']} • creato: {real_b.get('created_at','')} • stato: {real_b['status']}"):
+                if real_b["type"] == "multiple":
+                    st.write(
+                        f"Stake: **{real_b['stake']:.2f} €**  |  "
+                        f"Quota: **{real_b['combined_odds']:.2f}**  |  "
+                        f"Potenziale: **{real_b['potential_return']:.2f} €**"
+                    )
+                    legs_df = pd.DataFrame(real_b["legs"])
+                    st.dataframe(
+                        legs_df[["label","odds","prob","fair"]]
+                            .rename(columns={"label":"Selezione","odds":"Quota","prob":"Prob.","fair":"Fair"})
+                            .style.format({"Quota":"{:.2f}","Prob.":"{:.1%}","Fair":"{:.2f}"}),
+                        use_container_width=True
+                    )
+
+                    if real_b["status"] == "open":
                         colmb1, colmb2, colmb3 = st.columns(3)
                         with colmb1:
-                            won = st.button("✅ Esito: VINTA", key=f"mult_win_{b['id']}")
+                            won = st.button("✅ Esito: VINTA", key=f"mult_win_{real_b['id']}")
                         with colmb2:
-                            lost = st.button("❌ Esito: PERSA", key=f"mult_lost_{b['id']}")
+                            lost = st.button("❌ Esito: PERSA", key=f"mult_lost_{real_b['id']}")
                         with colmb3:
-                            void = st.button("↩️ VOID / Rimborso", key=f"mult_void_{b['id']}")
+                            void = st.button("↩️ VOID / Rimborso", key=f"mult_void_{real_b['id']}")
+
                         if won or lost or void:
                             if won:
-                                ret = float(b["stake"] * b["combined_odds"])
+                                ret = float(real_b["stake"] * real_b["combined_odds"])
                                 profile["balance"] += ret
-                                b["status"]="won"; b["return_amount"]=ret
+                                real_b["status"] = "won"
+                                real_b["return_amount"] = ret
                             elif lost:
-                                b["status"]="lost"; b["return_amount"]=0.0
-                            else:
-                                profile["balance"] += float(b["stake"])
-                                b["status"]="void"; b["return_amount"]=float(b["stake"])
+                                real_b["status"] = "lost"
+                                real_b["return_amount"] = 0.0
+                            else:  # void
+                                profile["balance"] += float(real_b["stake"])
+                                real_b["status"] = "void"
+                                real_b["return_amount"] = float(real_b["stake"])
+
+                            # Riassegna nell’array e persisti
+                            profile["bets"][real_i] = real_b
+                            st.session_state["profile"] = profile
                             save_profile(profile)
                             do_rerun()
                     else:
-                        st.write(f"Ritorno: **{b.get('return_amount',0.0):.2f} €**")
+                        st.write(f"Ritorno: **{real_b.get('return_amount',0.0):.2f} €**")
 
-                elif b["type"] == "system":
-                    st.write(f"Stake totale: **{b['stake']:.2f} €**  |  Sottoticket: **{len(b['subtickets'])}**")
-                    # tabella sottoticket con controlli esito
-                    rows=[]
-                    for t in b["subtickets"]:
+                elif real_b["type"] == "system":
+                    st.write(f"Stake totale: **{real_b['stake']:.2f} €**  |  Sottoticket: **{len(real_b['subtickets'])}**")
+
+                    # Tabella sottoticket
+                    rows = []
+                    for t in real_b["subtickets"]:
                         rows.append({
                             "ID sub": t["id"][:8],
                             "Tipo": t["type"],
@@ -978,102 +1003,149 @@ with tabs[8]:
                             "Stake": t["stake"],
                             "Prob": t["prob"],
                             "Stato": t["status"],
-                            "Ritorno": t.get("return_amount",0.0),
+                            "Ritorno": t.get("return_amount", 0.0),
                             "Selezioni": t["combo_label"]
                         })
                     df_sub = pd.DataFrame(rows)
-                    st.dataframe(df_sub.style.format({"Quota":"{:.2f}","Stake":"{:.2f}","Prob":"{:.1%}","Ritorno":"{:.2f}"}), use_container_width=True)
+                    st.dataframe(
+                        df_sub.style.format({"Quota":"{:.2f}","Stake":"{:.2f}","Prob":"{:.1%}","Ritorno":"{:.2f}"}),
+                        use_container_width=True
+                    )
 
-                    # pannello esito per ogni sub
-                    for t in b["subtickets"]:
-                        if t["status"]=="open":
-                            c1,c2,c3 = st.columns(3)
+                    # Pannello esito per ogni sub (aggiorna l'oggetto reale)
+                    for j, t in enumerate(real_b["subtickets"]):
+                        if t["status"] == "open":
+                            c1, c2, c3 = st.columns(3)
                             with c1:
                                 if st.button(f"✅ VINTA ({t['id'][:8]})", key=f"sys_win_{t['id']}"):
-                                    t["status"]="won"; t["return_amount"]=float(t["stake"] * t["odds"])
-                                    save_profile(profile); do_rerun()
+                                    t["status"] = "won"
+                                    t["return_amount"] = float(t["stake"] * t["odds"])
+                                    real_b["subtickets"][j] = t
+                                    profile["bets"][real_i] = real_b
+                                    st.session_state["profile"] = profile
+                                    save_profile(profile)
+                                    do_rerun()
                             with c2:
                                 if st.button(f"❌ PERSA ({t['id'][:8]})", key=f"sys_lost_{t['id']}"):
-                                    t["status"]="lost"; t["return_amount"]=0.0
-                                    save_profile(profile); do_rerun()
+                                    t["status"] = "lost"
+                                    t["return_amount"] = 0.0
+                                    real_b["subtickets"][j] = t
+                                    profile["bets"][real_i] = real_b
+                                    st.session_state["profile"] = profile
+                                    save_profile(profile)
+                                    do_rerun()
                             with c3:
                                 if st.button(f"↩️ VOID ({t['id'][:8]})", key=f"sys_void_{t['id']}"):
-                                    t["status"]="void"; t["return_amount"]=float(t["stake"])
-                                    save_profile(profile); do_rerun()
+                                    t["status"] = "void"
+                                    t["return_amount"] = float(t["stake"])
+                                    real_b["subtickets"][j] = t
+                                    profile["bets"][real_i] = real_b
+                                    st.session_state["profile"] = profile
+                                    save_profile(profile)
+                                    do_rerun()
 
-                    # chiusura sistema: somma ritorni dei sub chiusi
-                    if b["status"]=="open":
-                        all_closed = all(t["status"]!="open" for t in b["subtickets"])
-                        partial = any(t["status"]!="open" for t in b["subtickets"])
+                    # Chiusura sistema: somma ritorni dei sub chiusi
+                    if real_b["status"] == "open":
+                        all_closed = all(t["status"] != "open" for t in real_b["subtickets"])
+                        partial = any(t["status"] != "open" for t in real_b["subtickets"])
                         if all_closed:
-                            total_ret = float(sum(t.get("return_amount",0.0) for t in b["subtickets"]))
+                            total_ret = float(sum(t.get("return_amount", 0.0) for t in real_b["subtickets"]))
                             profile["balance"] += total_ret
-                            b["status"]="won" if total_ret> b["stake"] else ("void" if math.isclose(total_ret,b["stake"],rel_tol=1e-6) else "lost")
-                            b["return_amount"]=total_ret
-                            save_profile(profile); st.success(f"Sistema chiuso. Ritorno totale: {total_ret:.2f} €"); do_rerun()
+                            real_b["status"] = "won" if total_ret > real_b["stake"] else (
+                                "void" if math.isclose(total_ret, real_b["stake"], rel_tol=1e-6) else "lost"
+                            )
+                            real_b["return_amount"] = total_ret
+                            profile["bets"][real_i] = real_b
+                            st.session_state["profile"] = profile
+                            save_profile(profile)
+                            st.success(f"Sistema chiuso. Ritorno totale: {total_ret:.2f} €")
+                            do_rerun()
                         elif partial:
-                            b["status"]="partial"
+                            real_b["status"] = "partial"
+                            profile["bets"][real_i] = real_b
+                            st.session_state["profile"] = profile
                             save_profile(profile)
                             st.info("Sistema in stato PARZIALE: chiudi tutti i sottoticket per accreditare il ritorno totale.")
                     else:
-                        st.write(f"Ritorno accreditato: **{b.get('return_amount',0.0):.2f} €** (stato: {b['status']})")
+                        st.write(f"Ritorno accreditato: **{real_b.get('return_amount',0.0):.2f} €** (stato: {real_b['status']})")
 
                 else:  # single (non usata qui ma lasciata per completezza)
                     st.write("Schedina singola.")
-                    if b["status"]=="open":
-                        c1,c2,c3 = st.columns(3)
+                    if real_b["status"] == "open":
+                        c1, c2, c3 = st.columns(3)
                         with c1:
-                            if st.button("✅ VINTA", key=f"sg_win_{b['id']}"):
-                                ret = float(b["stake"] * b.get("odds",1.0))
+                            if st.button("✅ VINTA", key=f"sg_win_{real_b['id']}"):
+                                ret = float(real_b["stake"] * real_b.get("odds", 1.0))
                                 profile["balance"] += ret
-                                b["status"]="won"; b["return_amount"]=ret; save_profile(profile); do_rerun()
+                                real_b["status"] = "won"
+                                real_b["return_amount"] = ret
+                                profile["bets"][real_i] = real_b
+                                st.session_state["profile"] = profile
+                                save_profile(profile)
+                                do_rerun()
                         with c2:
-                            if st.button("❌ PERSA", key=f"sg_lost_{b['id']}"):
-                                b["status"]="lost"; b["return_amount"]=0.0; save_profile(profile); do_rerun()
+                            if st.button("❌ PERSA", key=f"sg_lost_{real_b['id']}"):
+                                real_b["status"] = "lost"
+                                real_b["return_amount"] = 0.0
+                                profile["bets"][real_i] = real_b
+                                st.session_state["profile"] = profile
+                                save_profile(profile)
+                                do_rerun()
                         with c3:
-                            if st.button("↩️ VOID", key=f"sg_void_{b['id']}"):
-                                profile["balance"] += float(b["stake"])
-                                b["status"]="void"; b["return_amount"]=float(b["stake"]); save_profile(profile); do_rerun()
+                            if st.button("↩️ VOID", key=f"sg_void_{real_b['id']}"):
+                                profile["balance"] += float(real_b["stake"])
+                                real_b["status"] = "void"
+                                real_b["return_amount"] = float(real_b["stake"])
+                                profile["bets"][real_i] = real_b
+                                st.session_state["profile"] = profile
+                                save_profile(profile)
+                                do_rerun()
 
         st.divider()
+
         # Esportazione storico CSV
         if bets:
-            # flattener semplice
-            out=[]
+            out = []
             for b in bets:
-                if b["type"]=="multiple":
+                if b["type"] == "multiple":
                     out.append({
                         "id": b["id"], "type": b["type"], "created_at": b.get("created_at",""),
                         "stake": b["stake"], "status": b["status"], "return": b.get("return_amount",0.0),
-                        "combined_odds": b.get("combined_odds",np.nan),
+                        "combined_odds": b.get("combined_odds", np.nan),
                         "legs": " | ".join([l["label"] for l in b["legs"]])
                     })
-                elif b["type"]=="system":
+                elif b["type"] == "system":
                     out.append({
                         "id": b["id"], "type": b["type"], "created_at": b.get("created_at",""),
                         "stake": b["stake"], "status": b["status"], "return": b.get("return_amount",0.0),
                         "combined_odds": np.nan,
-                        "legs": f"{len(b.get('subtickets',[]))} subtickets"
+                        "legs": f"{len(b.get('subtickets', []))} subtickets"
                     })
                 else:
                     out.append({
                         "id": b["id"], "type": b["type"], "created_at": b.get("created_at",""),
                         "stake": b["stake"], "status": b["status"], "return": b.get("return_amount",0.0),
-                        "combined_odds": b.get("odds",np.nan),
-                        "legs": b.get("label","")
+                        "combined_odds": b.get("odds", np.nan),
+                        "legs": b.get("label", "")
                     })
             df_hist = pd.DataFrame(out)
             st.dataframe(df_hist, use_container_width=True)
             csv = df_hist.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Esporta storico (CSV)", data=csv, file_name=f"{profile['username']}_storico.csv", mime="text/csv")
+            st.download_button("⬇️ Esporta storico (CSV)", data=csv,
+                               file_name=f"{profile['username']}_storico.csv", mime="text/csv")
 
         # Reset completo (cautela)
         with st.expander("⚠️ Reset profilo"):
             st.warning("Azzera saldo e cancella tutte le schedine del profilo corrente (irreversibile).")
             if st.button("Svuota profilo (saldo=0, schedine vuote)"):
-                profile["balance"]=0.0; profile["initial_balance"]=0.0; profile["bets"]=[]
-                save_profile(profile); st.success("Profilo azzerato."); do_rerun()
-
+                profile["balance"] = 0.0
+                profile["initial_balance"] = 0.0
+                profile["bets"] = []
+                st.session_state["profile"] = profile
+                save_profile(profile)
+                st.success("Profilo azzerato.")
+                do_rerun()
+                
 # ============= NOTE FINALI ====================================================
 with st.expander("ℹ️ Note"):
     st.markdown("""
