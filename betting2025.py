@@ -24,6 +24,7 @@ from typing import Tuple, Dict, List, Optional
 from collections import OrderedDict
 from itertools import combinations
 
+import hashlib
 import numpy as np
 import pandas as pd
 import requests
@@ -522,31 +523,42 @@ with st.sidebar:
     with colp1:
         load_btn = st.button("➜ Carica / Crea")
     with colp2:
-        imp_file = st.file_uploader("Import profilo (.json)", type=["json"], label_visibility="collapsed")
+        # 1) AGGIUNGI UNA CHIAVE
+        imp_file = st.file_uploader("Import profilo (.json)", type=["json"],
+                                    label_visibility="collapsed", key="imp_profile")
 
+    # 2) PROCESSA UNA SOLA VOLTA OGNI FILE (hash)
     if imp_file is not None:
         try:
-            imported = import_profile_json(imp_file)
-            # normalizza campi minimi
-            imported.setdefault("currency", "EUR")
-            imported.setdefault("initial_balance", float(imported.get("initial_balance", 0.0)))
-            imported.setdefault("bets", [])
-            for b in imported["bets"]:
-                b.setdefault("status", "open")
-                if b["type"] == "multiple":
-                    b.setdefault("return_amount", 0.0)
-                elif b["type"] == "system":
-                    for t in b.get("subtickets", []):
-                        t.setdefault("status", "open")
-                        t.setdefault("return_amount", 0.0)
+            raw = imp_file.getvalue()
+            h = hashlib.md5(raw).hexdigest()
+            if st.session_state.get("last_import_hash") != h:
+                imported = json.loads(raw.decode("utf-8"))
 
-            # aggiorna stato e persisti su file locale
-            st.session_state["profile"] = imported
-            st.session_state["username"] = imported["username"]
-            save_profile(imported)
+                # normalizza/migra schema
+                imported.setdefault("currency", "EUR")
+                imported["initial_balance"] = float(imported.get("initial_balance", 0.0))
+                imported.setdefault("bets", [])
+                for b in imported["bets"]:
+                    b.setdefault("status", "open")
+                    if b.get("type") == "multiple":
+                        b.setdefault("return_amount", 0.0)
+                    elif b.get("type") == "system":
+                        for t in b.get("subtickets", []):
+                            t.setdefault("status", "open")
+                            t.setdefault("return_amount", 0.0)
 
-            st.success(f"Profilo '{imported['username']}' importato. Ricarico l'app…")
-            do_rerun()
+                # aggiorna stato + salva su file
+                st.session_state["profile"] = imported
+                st.session_state["username"] = imported["username"]
+                st.session_state["last_import_hash"] = h
+                save_profile(imported)
+
+                st.success(f"Profilo '{imported['username']}' importato.")
+
+                # 3) SVUOTA L'UPLOADER PRIMA DEL RERUN (stoppa il loop)
+                st.session_state["imp_profile"] = None
+                do_rerun()
         except Exception as e:
             st.error(f"Import fallito: {e}")
 
