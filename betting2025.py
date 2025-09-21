@@ -555,10 +555,6 @@ with st.sidebar:
                 save_profile(imported)
 
                 st.success(f"Profilo '{imported['username']}' importato.")
-
-                # 3) SVUOTA L'UPLOADER PRIMA DEL RERUN (stoppa il loop)
-                st.session_state["imp_profile"] = None
-                do_rerun()
         except Exception as e:
             st.error(f"Import fallito: {e}")
 
