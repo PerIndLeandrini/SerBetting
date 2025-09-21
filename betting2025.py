@@ -524,18 +524,33 @@ with st.sidebar:
     with colp2:
         imp_file = st.file_uploader("Import profilo (.json)", type=["json"], label_visibility="collapsed")
 
-    if load_btn and username.strip()=="":
-        st.warning("Inserisci un nome utente.")
     if imp_file is not None:
         try:
             imported = import_profile_json(imp_file)
+            # normalizza campi minimi
+            imported.setdefault("currency", "EUR")
+            imported.setdefault("initial_balance", float(imported.get("initial_balance", 0.0)))
+            imported.setdefault("bets", [])
+            for b in imported["bets"]:
+                b.setdefault("status", "open")
+                if b["type"] == "multiple":
+                    b.setdefault("return_amount", 0.0)
+                elif b["type"] == "system":
+                    for t in b.get("subtickets", []):
+                        t.setdefault("status", "open")
+                        t.setdefault("return_amount", 0.0)
+
+            # aggiorna stato e persisti su file locale
             st.session_state["profile"] = imported
             st.session_state["username"] = imported["username"]
             save_profile(imported)
-            st.success(f"Profilo '{imported['username']}' importato.")
+
+            st.success(f"Profilo '{imported['username']}' importato. Ricarico l'app…")
+            do_rerun()
         except Exception as e:
             st.error(f"Import fallito: {e}")
 
+    # gestione normale del profilo
     profile = st.session_state.get("profile")
     if (load_btn and username.strip()):
         profile = load_profile(username.strip())
@@ -1145,7 +1160,7 @@ with tabs[8]:
                 save_profile(profile)
                 st.success("Profilo azzerato.")
                 do_rerun()
-                
+
 # ============= NOTE FINALI ====================================================
 with st.expander("ℹ️ Note"):
     st.markdown("""
